@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atletas · Prontuário</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">Prontuário · Cuiabá EC</span>
+  <div>
+    <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="sair()">Sair</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h2>Novo atleta</h2>
+    <label for="nome">Nome</label>
+    <input type="text" id="nome" placeholder="Lucas Almeida">
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;">
+        <label for="ano">Ano de nascimento</label>
+        <input type="text" id="ano" placeholder="2011">
+      </div>
+      <div style="flex:1;">
+        <label for="categoria">Categoria (livre)</label>
+        <input type="text" id="categoria" placeholder="Sub-15">
+      </div>
+    </div>
+    <label for="posicao">Posição</label>
+    <input type="text" id="posicao" placeholder="Meio-campo">
+    <button class="btn btn-gold" style="margin-top:16px;" onclick="cadastrarAtleta()">Cadastrar atleta</button>
+    <p id="erroAtleta" class="error-msg" style="display:none;"></p>
+  </div>
+
+  <div class="card">
+    <h2>Atletas</h2>
+    <input type="text" id="busca" placeholder="Buscar por nome, ano ou categoria" oninput="filtrar()">
+    <div id="lista" style="margin-top:14px;"></div>
+    <p id="vazio" class="hint" style="display:none;">Nenhum atleta cadastrado ainda.</p>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let atletas = [];
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  carregarAtletas();
+});
+
+window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
+
+function carregarAtletas() {
+  const q = query(collection(db, "atletas"), orderBy("nome"));
+  onSnapshot(q, (snap) => {
+    atletas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderizar(atletas);
+  });
+}
+
+function renderizar(lista) {
+  const el = document.getElementById("lista");
+  const vazio = document.getElementById("vazio");
+  el.innerHTML = "";
+  vazio.style.display = lista.length === 0 ? "block" : "none";
+  lista.forEach(a => {
+    const row = document.createElement("a");
+    row.className = "list-row";
+    row.href = `atleta.html?id=${a.id}`;
+    row.innerHTML = `
+      <span>${escapeHtml(a.nome)}</span>
+      <span class="pill">${escapeHtml(a.ano || "—")}${a.categoria ? " · " + escapeHtml(a.categoria) : ""}</span>
+    `;
+    el.appendChild(row);
+  });
+}
+
+window.filtrar = function () {
+  const termo = document.getElementById("busca").value.toLowerCase();
+  const filtrados = atletas.filter(a =>
+    (a.nome || "").toLowerCase().includes(termo) ||
+    (a.ano || "").toLowerCase().includes(termo) ||
+    (a.categoria || "").toLowerCase().includes(termo)
+  );
+  renderizar(filtrados);
+};
+
+window.cadastrarAtleta = function () {
+  const nome = document.getElementById("nome").value.trim();
+  const ano = document.getElementById("ano").value.trim();
+  const categoria = document.getElementById("categoria").value.trim();
+  const posicao = document.getElementById("posicao").value.trim();
+  const erroEl = document.getElementById("erroAtleta");
+  erroEl.style.display = "none";
+
+  if (!nome || !ano) {
+    erroEl.textContent = "Preencha ao menos nome e ano de nascimento.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  addDoc(collection(db, "atletas"), {
+    nome, ano, categoria, posicao,
+    criadoEm: serverTimestamp()
+  }).then(() => {
+    document.getElementById("nome").value = "";
+    document.getElementById("ano").value = "";
+    document.getElementById("categoria").value = "";
+    document.getElementById("posicao").value = "";
+  }).catch((err) => {
+    erroEl.textContent = "Não foi possível cadastrar. Tente novamente.";
+    erroEl.style.display = "block";
+    console.error(err);
+  });
+};
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prontuário · Cuiabá EC</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container" style="max-width: 380px; padding-top: 64px;">
+  <div class="card">
+    <div style="text-align:center; margin-bottom: 16px;">
+      <h1 style="margin-bottom: 2px;">Prontuário do clube</h1>
+      <p class="sub" style="margin-bottom: 0;">acesso restrito à equipe de psicologia</p>
+    </div>
+    <label for="email">E-mail</label>
+    <input type="email" id="email" placeholder="nome@cuiabaec.com.br">
+    <label for="senha">Senha</label>
+    <input type="password" id="senha" placeholder="••••••••">
+    <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="fazerLogin()">Entrar</button>
+    <p id="erro" class="error-msg" style="display:none;"></p>
+    <p id="ok" style="color:#3B6D11; font-size:13px; margin-top:6px; display:none;"></p>
+    <p style="text-align:center; margin-top:10px;">
+      <a href="#" onclick="esqueciSenha(); return false;" style="font-size:13px; color:#304E38;">Esqueci minha senha</a>
+    </p>
+  </div>
+  <p class="hint" style="text-align:center;">Contas criadas manualmente no Firebase Console. Fale com quem administra o projeto se ainda não tem acesso.</p>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+onAuthStateChanged(auth, (user) => {
+  if (user) window.location.href = "atletas.html";
+});
+
+window.fazerLogin = function () {
+  const email = document.getElementById("email").value.trim();
+  const senha = document.getElementById("senha").value;
+  const erroEl = document.getElementById("erro");
+  erroEl.style.display = "none";
+
+  if (!email || !senha) {
+    erroEl.textContent = "Preencha e-mail e senha.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  signInWithEmailAndPassword(auth, email, senha)
+    .then(() => { window.location.href = "atletas.html"; })
+    .catch((err) => {
+      erroEl.textContent = "Não foi possível entrar. Confira e-mail e senha.";
+      erroEl.style.display = "block";
+      console.error(err);
+    });
+};
+
+window.esqueciSenha = function () {
+  const email = document.getElementById("email").value.trim();
+  const erroEl = document.getElementById("erro");
+  const okEl = document.getElementById("ok");
+  erroEl.style.display = "none";
+  okEl.style.display = "none";
+
+  if (!email) {
+    erroEl.textContent = "Digite seu e-mail no campo acima antes de clicar em \"Esqueci minha senha\".";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  sendPasswordResetEmail(auth, email)
+    .then(() => {
+      okEl.textContent = "Enviamos um link de redefinição para esse e-mail, se ele estiver cadastrado.";
+      okEl.style.display = "block";
+    })
+    .catch((err) => {
+      okEl.textContent = "Enviamos um link de redefinição para esse e-mail, se ele estiver cadastrado.";
+      okEl.style.display = "block";
+      console.error(err);
+    });
+};
+</script>
+
+</body>
+</html>

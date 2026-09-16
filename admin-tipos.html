@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tipos de registro · Prontuário</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">Prontuário · Cuiabá EC</span>
+  <div>
+    <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="sair()">Sair</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h2>Novo tipo de registro</h2>
+    <p class="sub">Isso cria uma nova aba na ficha de cada atleta. As quatro abas iniciais (Anamnese, Atendimentos, Demandas, Intervenções) já vêm pré-cadastradas abaixo — você pode editá-las ou criar outras do zero.</p>
+
+    <label for="nomeTipo">Nome da aba</label>
+    <input type="text" id="nomeTipo" placeholder="Avaliação física">
+
+    <label>Campos do formulário</label>
+    <div id="campos"></div>
+    <button class="btn btn-outline" style="margin-top:6px;" onclick="adicionarCampo()">+ adicionar campo</button>
+
+    <label style="margin-top:18px;">Visibilidade padrão</label>
+    <div class="tabbar" id="visBar">
+      <button class="tabbtn active" data-v="compartilhada" onclick="escolherVisibilidade('compartilhada')">Compartilhada</button>
+      <button class="tabbtn" data-v="privada" onclick="escolherVisibilidade('privada')">Privada</button>
+      <button class="tabbtn" data-v="mista" onclick="escolherVisibilidade('mista')">Mista</button>
+    </div>
+    <p class="hint">
+      Compartilhada: os dois profissionais veem tudo. Privada: só quem criou o registro vê.
+      Mista: privada por padrão, com opção de marcar um campo como "visível ao colega" em cada registro individual (como no Atendimento).
+    </p>
+
+    <button class="btn btn-gold" style="margin-top:16px;" onclick="salvarTipo()">Criar aba</button>
+    <p id="erroTipo" class="error-msg" style="display:none;"></p>
+  </div>
+
+  <div class="card">
+    <h2>Abas existentes</h2>
+    <div id="listaTipos"></div>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let campoIdSeq = 0;
+let visibilidadeAtual = "compartilhada";
+
+const TIPOS_PADRAO = [
+  {
+    nome: "Anamnese",
+    visibilidadePadrao: "compartilhada",
+    campos: [
+      { nome: "Histórico esportivo", tipo: "texto_longo" },
+      { nome: "Contexto familiar", tipo: "texto_longo" },
+      { nome: "Observações iniciais", tipo: "texto_longo" },
+      { nome: "Anexo", tipo: "anexo" }
+    ]
+  },
+  {
+    nome: "Atendimentos",
+    visibilidadePadrao: "mista",
+    campos: [
+      { nome: "Data do atendimento", tipo: "data" },
+      { nome: "Conteúdo da sessão", tipo: "texto_longo" },
+      { nome: "Visível ao colega", tipo: "texto_curto" },
+      { nome: "Anexo", tipo: "anexo" }
+    ]
+  },
+  {
+    nome: "Demandas",
+    visibilidadePadrao: "compartilhada",
+    campos: [
+      { nome: "Data", tipo: "data" },
+      { nome: "Origem", tipo: "selecao", opcoes: ["Comissão técnica", "Autodemanda", "Encaminhamento", "Família"] },
+      { nome: "Descrição", tipo: "texto_longo" },
+      { nome: "Status", tipo: "selecao", opcoes: ["Aberta", "Em andamento", "Encerrada"] }
+    ]
+  },
+  {
+    nome: "Intervenções",
+    visibilidadePadrao: "compartilhada",
+    campos: [
+      { nome: "Data", tipo: "data" },
+      { nome: "Plano / decisão", tipo: "texto_longo" },
+      { nome: "Profissional responsável", tipo: "texto_curto" },
+      { nome: "Anexo", tipo: "anexo" }
+    ]
+  }
+];
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  await garantirTiposPadrao();
+  carregarTipos();
+});
+
+window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
+
+async function garantirTiposPadrao() {
+  const snap = await getDocs(collection(db, "tiposRegistro"));
+  if (!snap.empty) return;
+  for (const tipo of TIPOS_PADRAO) {
+    await addDoc(collection(db, "tiposRegistro"), tipo);
+  }
+}
+
+async function carregarTipos() {
+  const q = query(collection(db, "tiposRegistro"), orderBy("nome"));
+  const snap = await getDocs(q);
+  const el = document.getElementById("listaTipos");
+  el.innerHTML = "";
+  snap.docs.forEach(d => {
+    const t = d.data();
+    const row = document.createElement("div");
+    row.className = "field-row";
+    row.innerHTML = `
+      <span>${escapeHtml(t.nome)} <span class="pill pill-outline" style="margin-left:6px;">${escapeHtml(t.visibilidadePadrao)}</span> · ${t.campos.length} campo(s)</span>
+      <button class="btn btn-outline" style="padding:4px 10px; font-size:12px;" data-id="${d.id}">Remover</button>
+    `;
+    row.querySelector("button").addEventListener("click", () => removerTipo(d.id));
+    el.appendChild(row);
+  });
+}
+
+async function removerTipo(id) {
+  if (!confirm("Remover esta aba? Os registros já lançados nela permanecem no banco, mas ela some da ficha do atleta.")) return;
+  await deleteDoc(doc(db, "tiposRegistro", id));
+  carregarTipos();
+}
+
+window.adicionarCampo = function () {
+  const id = `campo-${campoIdSeq++}`;
+  const wrap = document.createElement("div");
+  wrap.className = "field-row";
+  wrap.id = id;
+  wrap.innerHTML = `
+    <input type="text" placeholder="Nome do campo" style="flex:1; margin-right:8px;" class="campo-nome">
+    <select class="campo-tipo" style="width:150px; margin-right:8px;">
+      <option value="texto_curto">Texto curto</option>
+      <option value="texto_longo">Texto longo</option>
+      <option value="data">Data</option>
+      <option value="selecao">Seleção</option>
+      <option value="anexo">Anexo</option>
+    </select>
+    <button class="btn btn-outline" style="padding:4px 10px; font-size:12px;" onclick="document.getElementById('${id}').remove()">×</button>
+  `;
+  document.getElementById("campos").appendChild(wrap);
+};
+
+window.escolherVisibilidade = function (v) {
+  visibilidadeAtual = v;
+  document.querySelectorAll("#visBar .tabbtn").forEach(b => b.classList.toggle("active", b.dataset.v === v));
+};
+
+window.salvarTipo = async function () {
+  const nome = document.getElementById("nomeTipo").value.trim();
+  const erroEl = document.getElementById("erroTipo");
+  erroEl.style.display = "none";
+
+  const campos = Array.from(document.querySelectorAll("#campos > div")).map(row => ({
+    nome: row.querySelector(".campo-nome").value.trim(),
+    tipo: row.querySelector(".campo-tipo").value
+  })).filter(c => c.nome);
+
+  if (!nome || campos.length === 0) {
+    erroEl.textContent = "Dê um nome à aba e adicione pelo menos um campo.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  await addDoc(collection(db, "tiposRegistro"), {
+    nome, campos, visibilidadePadrao: visibilidadeAtual
+  });
+
+  document.getElementById("nomeTipo").value = "";
+  document.getElementById("campos").innerHTML = "";
+  carregarTipos();
+};
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+</script>
+
+</body>
+</html>

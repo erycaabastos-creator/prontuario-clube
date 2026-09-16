@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ficha do atleta · Prontuário</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">Prontuário · Cuiabá EC</span>
+  <div>
+    <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="sair()">Sair</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h1 id="nomeAtleta">—</h1>
+    <p class="sub" id="metaAtleta">—</p>
+  </div>
+
+  <div class="card">
+    <div class="tabbar" id="tabbar"></div>
+
+    <div id="formNovoRegistro"></div>
+
+    <div id="historico" style="margin-top:18px;"></div>
+    <p id="semRegistros" class="hint" style="display:none;">Nenhum registro nesta aba ainda.</p>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const LIMITE_ANEXO_BYTES = 700 * 1024; // ~700KB — cabe com folga no limite de 1MiB por documento do Firestore
+
+const params = new URLSearchParams(window.location.search);
+const atletaId = params.get("id");
+
+let usuarioAtual = null;
+let tipos = [];
+let tipoAtivo = null;
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  if (!atletaId) { window.location.href = "atletas.html"; return; }
+  usuarioAtual = user;
+  await carregarAtleta();
+  await carregarTipos();
+});
+
+window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
+
+async function carregarAtleta() {
+  const snap = await getDoc(doc(db, "atletas", atletaId));
+  if (!snap.exists()) { window.location.href = "atletas.html"; return; }
+  const a = snap.data();
+  document.getElementById("nomeAtleta").textContent = a.nome;
+  document.getElementById("metaAtleta").textContent =
+    `${a.ano || "—"}${a.categoria ? " · " + a.categoria : ""}${a.posicao ? " · " + a.posicao : ""}`;
+}
+
+async function carregarTipos() {
+  const q = query(collection(db, "tiposRegistro"), orderBy("nome"));
+  const snap = await getDocs(q);
+  tipos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (tipos.length === 0) return;
+
+  const bar = document.getElementById("tabbar");
+  bar.innerHTML = "";
+  tipos.forEach((t, i) => {
+    const btn = document.createElement("button");
+    btn.className = "tabbtn" + (i === 0 ? " active" : "");
+    btn.textContent = t.nome;
+    btn.onclick = () => selecionarTipo(t.id);
+    bar.appendChild(btn);
+  });
+
+  selecionarTipo(tipos[0].id);
+}
+
+function selecionarTipo(tipoId) {
+  tipoAtivo = tipos.find(t => t.id === tipoId);
+  document.querySelectorAll("#tabbar .tabbtn").forEach((btn, i) => {
+    btn.classList.toggle("active", tipos[i].id === tipoId);
+  });
+  renderFormulario();
+  carregarHistorico();
+}
+
+function renderFormulario() {
+  const el = document.getElementById("formNovoRegistro");
+  if (!tipoAtivo) { el.innerHTML = ""; return; }
+
+  let camposHtml = tipoAtivo.campos.map((campo, idx) => {
+    const id = `campo-${idx}`;
+    if (campo.tipo === "texto_curto") return `<label>${esc(campo.nome)}</label><input type="text" id="${id}">`;
+    if (campo.tipo === "texto_longo") return `<label>${esc(campo.nome)}</label><textarea id="${id}"></textarea>`;
+    if (campo.tipo === "data") return `<label>${esc(campo.nome)}</label><input type="date" id="${id}">`;
+    if (campo.tipo === "selecao") {
+      const opts = (campo.opcoes || []).map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+      return `<label>${esc(campo.nome)}</label><select id="${id}"><option value="">Selecione</option>${opts}</select>`;
+    }
+    if (campo.tipo === "anexo") return `<label>${esc(campo.nome)}</label><input type="file" id="${id}"><p class="hint">Até 700KB por arquivo.</p>`;
+    return "";
+  }).join("");
+
+  let visivelColegaHtml = "";
+  if (tipoAtivo.visibilidadePadrao === "mista") {
+    visivelColegaHtml = `
+      <label style="display:flex; align-items:center; gap:8px; margin-top:14px;">
+        <input type="checkbox" id="visivelColega" style="width:auto;"> Visível ao colega
+      </label>`;
+  }
+
+  el.innerHTML = `
+    <h2>Novo registro · ${esc(tipoAtivo.nome)}</h2>
+    <p class="sub">${legendaVisibilidade(tipoAtivo.visibilidadePadrao)}</p>
+    ${camposHtml}
+    ${visivelColegaHtml}
+    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarRegistro()">Salvar registro</button>
+    <p id="erroRegistro" class="error-msg" style="display:none;"></p>
+  `;
+}
+
+function legendaVisibilidade(v) {
+  if (v === "compartilhada") return "Compartilhada — os dois profissionais veem este registro.";
+  if (v === "privada") return "Privada — só você vê este registro.";
+  return "Privada por padrão — marque \"visível ao colega\" para compartilhar este registro específico.";
+}
+
+window.salvarRegistro = async function () {
+  const erroEl = document.getElementById("erroRegistro");
+  erroEl.style.display = "none";
+
+  const dados = {};
+  const anexos = {};
+  let temErro = false;
+
+  for (let idx = 0; idx < tipoAtivo.campos.length; idx++) {
+    const campo = tipoAtivo.campos[idx];
+    const el = document.getElementById(`campo-${idx}`);
+    if (campo.tipo === "anexo") {
+      const file = el.files[0];
+      if (file) {
+        if (file.size > LIMITE_ANEXO_BYTES) {
+          erroEl.textContent = `O arquivo em "${campo.nome}" passa de 700KB. Use um arquivo menor (ex.: comprima a imagem ou o PDF).`;
+          erroEl.style.display = "block";
+          temErro = true;
+          break;
+        }
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        anexos[campo.nome] = { nome: file.name, dados: base64 };
+      }
+    } else {
+      dados[campo.nome] = el.value;
+    }
+  }
+
+  if (temErro) return;
+
+  const visivelColegaEl = document.getElementById("visivelColega");
+  const visivelColega = tipoAtivo.visibilidadePadrao === "mista" ? !!(visivelColegaEl && visivelColegaEl.checked) : false;
+
+  await addDoc(collection(db, "registros"), {
+    atletaId, tipoId: tipoAtivo.id,
+    dados, anexos,
+    visivelColega,
+    autorUid: usuarioAtual.uid,
+    autorEmail: usuarioAtual.email,
+    criadoEm: serverTimestamp()
+  });
+
+  renderFormulario();
+  carregarHistorico();
+};
+
+async function carregarHistorico() {
+  const historicoEl = document.getElementById("historico");
+  const semEl = document.getElementById("semRegistros");
+  historicoEl.innerHTML = "";
+
+  const q = query(collection(db, "registros"), where("atletaId", "==", atletaId), where("tipoId", "==", tipoAtivo.id));
+  const snap = await getDocs(q);
+
+  // Filtro de visibilidade aplicado no cliente; a regra real de acesso está no firestore.rules,
+  // então mesmo que este filtro fosse contornado, o servidor não devolveria registros indevidos.
+  let regs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  regs.sort((a, b) => (b.criadoEm?.seconds || 0) - (a.criadoEm?.seconds || 0));
+
+  semEl.style.display = regs.length === 0 ? "block" : "none";
+
+  regs.forEach(r => {
+    const div = document.createElement("div");
+    div.className = "entry";
+    const autor = r.autorEmail === usuarioAtual.email ? "você" : r.autorEmail;
+    const dataStr = r.criadoEm?.seconds ? new Date(r.criadoEm.seconds * 1000).toLocaleDateString("pt-BR") : "";
+    const badge = tipoAtivo.visibilidadePadrao === "mista"
+      ? `<span class="pill ${r.visivelColega ? "pill-gold" : "pill-outline"}">${r.visivelColega ? "visível ao colega" : "privado"}</span>`
+      : "";
+    let camposStr = Object.entries(r.dados || {}).map(([k, v]) => `<div><strong style="font-weight:600;">${esc(k)}:</strong> ${esc(v || "—")}</div>`).join("");
+    let anexosStr = Object.entries(r.anexos || {}).map(([k, v]) =>
+      `<a class="attachment-link" href="${v.dados}" download="${esc(v.nome)}">📎 ${esc(v.nome)}</a>`
+    ).join("");
+    div.innerHTML = `
+      <div class="meta">${esc(autor)} · ${dataStr} ${badge}</div>
+      ${camposStr}
+      ${anexosStr}
+    `;
+    historicoEl.appendChild(div);
+  });
+}
+
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+</script>
+
+</body>
+</html>
