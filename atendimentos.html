@@ -94,7 +94,7 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, doc, setDoc, deleteDoc, getDocs, query, where, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, setDoc, deleteDoc, getDocs, query, where, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -138,7 +138,12 @@ window.buscarAtletaForm = function () {
   const el = document.getElementById("atletaSugestoes");
   el.innerHTML = "";
   if (!termo) return;
-  atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6).forEach(a => {
+  const encontrados = atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6);
+  if (encontrados.length === 0) {
+    el.innerHTML = `<p class="hint">Nenhum atleta encontrado com esse nome. Cadastre-o primeiro em "Atletas".</p>`;
+    return;
+  }
+  encontrados.forEach(a => {
     const item = document.createElement("div");
     item.className = "field-row";
     item.style.cursor = "pointer";
@@ -272,7 +277,13 @@ window.buscarAtletaConsulta = function () {
   el.innerHTML = "";
   atletaConsultaSelecionado = null;
   if (!termo) { renderResultado(); return; }
-  atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6).forEach(a => {
+  const encontrados = atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6);
+  if (encontrados.length === 0) {
+    el.innerHTML = `<p class="hint">Nenhum atleta encontrado com esse nome.</p>`;
+    renderResultado();
+    return;
+  }
+  encontrados.forEach(a => {
     const item = document.createElement("div");
     item.className = "field-row";
     item.style.cursor = "pointer";
@@ -292,6 +303,15 @@ function passaFiltroAutor(a) {
   if (filtroAutor === "colega") return a.autorUid !== usuarioAtual.uid;
   return true;
 }
+
+window.abrirHistoricoAtleta = function (id, nome) {
+  mudarModo("atleta");
+  atletaConsultaSelecionado = id;
+  document.getElementById("buscaAtletaConsulta").value = nome;
+  document.getElementById("atletaConsultaSugestoes").innerHTML = "";
+  renderResultado();
+  document.getElementById("modoAtleta").scrollIntoView({ behavior: "smooth" });
+};
 
 function renderResultado() {
   const tituloEl = document.getElementById("resultadoTitulo");
@@ -328,13 +348,19 @@ function renderResultado() {
     const excluirBtn = podeExcluir ? `<button class="btn btn-outline" style="font-size:11px; padding:3px 8px; margin-left:8px;" data-excluir="${a.id}">Excluir</button>` : "";
     row.innerHTML = `
       <div class="meta">
-        <a href="atleta.html?id=${a.atletaId}" style="color:#304E38; font-weight:600; text-decoration:underline;">${esc(a.atletaNome)}</a>
+        <a href="#" class="ver-historico" data-id="${a.atletaId}" data-nome="${escAttr(a.atletaNome)}" style="color:#304E38; font-weight:600; text-decoration:underline;">${esc(a.atletaNome)}</a>
         · ${dataFmt} · ${esc(a.assinatura)}
         <span class="pill pill-outline" style="margin-left:6px;">${esc(a.visibilidade)}</span>
         ${excluirBtn}
       </div>
       ${notaHtml}
+      <button class="btn btn-outline no-print" style="font-size:11px; padding:3px 8px; margin-top:6px;" data-vercont="${a.id}">Ver conteúdo</button>
+      <div class="conteudo-atendimento" id="conteudo-${a.id}" style="display:none; margin-top:8px; font-size:13px; color:#304E38; background:#FCFBF7; border-radius:8px; padding:8px 10px;"></div>
     `;
+    row.querySelector(".ver-historico").addEventListener("click", (e) => {
+      e.preventDefault();
+      abrirHistoricoAtleta(a.atletaId, a.atletaNome);
+    });
     if (podeExcluir) {
       row.querySelector("[data-excluir]").addEventListener("click", async () => {
         if (!confirm("Excluir este atendimento? Essa ação não pode ser desfeita.")) return;
@@ -343,13 +369,31 @@ function renderResultado() {
         await carregarAtendimentos();
       });
     }
+    row.querySelector("[data-vercont]").addEventListener("click", () => alternarConteudo(a.id));
     listaEl.appendChild(row);
   });
+}
+
+async function alternarConteudo(id) {
+  const el = document.getElementById(`conteudo-${id}`);
+  const abrindo = el.style.display === "none";
+  el.style.display = abrindo ? "block" : "none";
+  if (!abrindo || el.dataset.carregado) return;
+  el.textContent = "Carregando...";
+  try {
+    const snap = await getDoc(doc(db, "atendimentos_conteudo", id));
+    el.textContent = snap.exists() ? snap.data().conteudo : "Sem conteúdo registrado.";
+    el.dataset.carregado = "1";
+  } catch (err) {
+    el.textContent = "Conteúdo privado — só quem fez o atendimento (ou, se marcado como compartilhado, ambos) pode ver.";
+    el.dataset.carregado = "1";
+  }
 }
 
 function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
+function escAttr(str) { return esc(str); }
 </script>
 
 </body>
