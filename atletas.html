@@ -11,7 +11,10 @@
 <div class="topbar">
   <span class="brand">Prontuário · Cuiabá EC</span>
   <div>
+    <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="window.location.href='atendimentos.html'" style="margin-right:8px;">Atendimentos</button>
     <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="window.location.href='importar-anamneses.html'" style="margin-right:8px;">Importar</button>
     <button onclick="sair()">Sair</button>
   </div>
 </div>
@@ -31,16 +34,29 @@
         <input type="text" id="categoria" placeholder="Sub-15">
       </div>
     </div>
-    <label for="posicao">Posição</label>
-    <input type="text" id="posicao" placeholder="Meio-campo">
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;">
+        <label for="posicao">Posição</label>
+        <input type="text" id="posicao" placeholder="Meio-campo">
+      </div>
+      <div style="flex:1;">
+        <label for="dataEntrada">Data de entrada no clube</label>
+        <input type="date" id="dataEntrada">
+      </div>
+    </div>
     <button class="btn btn-gold" style="margin-top:16px;" onclick="cadastrarAtleta()">Cadastrar atleta</button>
     <p id="erroAtleta" class="error-msg" style="display:none;"></p>
   </div>
 
   <div class="card">
-    <h2>Atletas</h2>
-    <input type="text" id="busca" placeholder="Buscar por nome, ano ou categoria" oninput="filtrar()">
-    <div id="lista" style="margin-top:14px;"></div>
+    <h2>Buscar por nome</h2>
+    <input type="text" id="busca" placeholder="Digite o nome do atleta..." oninput="filtrar()">
+    <div id="listaBusca" style="margin-top:14px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Atletas por ano de nascimento</h2>
+    <div id="pastas"></div>
     <p id="vazio" class="hint" style="display:none;">Nenhum atleta cadastrado ainda.</p>
   </div>
 </div>
@@ -49,54 +65,101 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, addDoc, getDocs, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
 let atletas = [];
+let atletasComAnamnese = new Set();
+let pastaAberta = null;
 
 onAuthStateChanged(auth, (user) => {
   if (!user) { window.location.href = "index.html"; return; }
+  carregarAnamnesesExistentes();
   carregarAtletas();
 });
 
 window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
 
+async function carregarAnamnesesExistentes() {
+  const snap = await getDocs(collection(db, "anamneses"));
+  atletasComAnamnese = new Set(snap.docs.map(d => d.id));
+}
+
 function carregarAtletas() {
   const q = query(collection(db, "atletas"), orderBy("nome"));
   onSnapshot(q, (snap) => {
     atletas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderizar(atletas);
+    renderizarPastas();
+    filtrar();
   });
 }
 
-function renderizar(lista) {
-  const el = document.getElementById("lista");
+function renderizarPastas() {
+  const el = document.getElementById("pastas");
   const vazio = document.getElementById("vazio");
+  vazio.style.display = atletas.length === 0 ? "block" : "none";
   el.innerHTML = "";
-  vazio.style.display = lista.length === 0 ? "block" : "none";
-  lista.forEach(a => {
-    const row = document.createElement("a");
-    row.className = "list-row";
-    row.href = `atleta.html?id=${a.id}`;
-    row.innerHTML = `
-      <span>${escapeHtml(a.nome)}</span>
-      <span class="pill">${escapeHtml(a.ano || "—")}${a.categoria ? " · " + escapeHtml(a.categoria) : ""}</span>
-    `;
-    el.appendChild(row);
+
+  const porAno = {};
+  atletas.forEach(a => {
+    const ano = a.ano || "Sem ano";
+    if (!porAno[ano]) porAno[ano] = [];
+    porAno[ano].push(a);
   });
+
+  Object.keys(porAno).sort().reverse().forEach(ano => {
+    const grupo = porAno[ano];
+    const wrap = document.createElement("div");
+    const aberta = pastaAberta === ano;
+    wrap.innerHTML = `
+      <button class="pastaBtn ${aberta ? 'aberta' : ''}" data-ano="${escapeHtml(ano)}">
+        <span>📁 ${escapeHtml(ano)}${grupo[0].categoria ? " · " + escapeHtml(grupo[0].categoria) : ""}</span>
+        <span>${grupo.length} atleta(s)</span>
+      </button>
+    `;
+    wrap.querySelector("button").addEventListener("click", () => {
+      pastaAberta = aberta ? null : ano;
+      renderizarPastas();
+    });
+    el.appendChild(wrap);
+
+    if (aberta) {
+      const lista = document.createElement("div");
+      lista.style.cssText = "margin: 0 0 12px 16px; display:flex; flex-direction:column; gap:6px;";
+      grupo.forEach(a => {
+        lista.appendChild(criarLinhaAtleta(a));
+      });
+      el.appendChild(lista);
+    }
+  });
+}
+
+function criarLinhaAtleta(a) {
+  const row = document.createElement("a");
+  row.className = "list-row";
+  row.href = `atleta.html?id=${a.id}`;
+  const semAnamnese = !atletasComAnamnese.has(a.id);
+  row.innerHTML = `
+    <span>${escapeHtml(a.nome)}${semAnamnese ? '<span class="aviso-pill">sem anamnese</span>' : ''}</span>
+    <span class="pill">${escapeHtml(a.categoria || a.ano || "—")}</span>
+  `;
+  return row;
 }
 
 window.filtrar = function () {
-  const termo = document.getElementById("busca").value.toLowerCase();
-  const filtrados = atletas.filter(a =>
-    (a.nome || "").toLowerCase().includes(termo) ||
-    (a.ano || "").toLowerCase().includes(termo) ||
-    (a.categoria || "").toLowerCase().includes(termo)
-  );
-  renderizar(filtrados);
+  const termo = document.getElementById("busca").value.trim().toLowerCase();
+  const el = document.getElementById("listaBusca");
+  el.innerHTML = "";
+  if (!termo) return;
+  const filtrados = atletas.filter(a => (a.nome || "").toLowerCase().includes(termo));
+  if (filtrados.length === 0) {
+    el.innerHTML = `<p class="hint">Nenhum atleta encontrado.</p>`;
+    return;
+  }
+  filtrados.forEach(a => el.appendChild(criarLinhaAtleta(a)));
 };
 
 window.cadastrarAtleta = function () {
@@ -104,6 +167,7 @@ window.cadastrarAtleta = function () {
   const ano = document.getElementById("ano").value.trim();
   const categoria = document.getElementById("categoria").value.trim();
   const posicao = document.getElementById("posicao").value.trim();
+  const dataEntrada = document.getElementById("dataEntrada").value;
   const erroEl = document.getElementById("erroAtleta");
   erroEl.style.display = "none";
 
@@ -114,13 +178,14 @@ window.cadastrarAtleta = function () {
   }
 
   addDoc(collection(db, "atletas"), {
-    nome, ano, categoria, posicao,
+    nome, ano, categoria, posicao, dataEntrada,
     criadoEm: serverTimestamp()
   }).then(() => {
     document.getElementById("nome").value = "";
     document.getElementById("ano").value = "";
     document.getElementById("categoria").value = "";
     document.getElementById("posicao").value = "";
+    document.getElementById("dataEntrada").value = "";
   }).catch((err) => {
     erroEl.textContent = "Não foi possível cadastrar. Tente novamente.";
     erroEl.style.display = "block";

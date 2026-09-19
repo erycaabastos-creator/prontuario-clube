@@ -12,6 +12,9 @@
   <span class="brand">Prontuário · Cuiabá EC</span>
   <div>
     <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="window.location.href='atendimentos.html'" style="margin-right:8px;">Atendimentos</button>
+    <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="window.location.href='importar-anamneses.html'" style="margin-right:8px;">Importar</button>
     <button onclick="sair()">Sair</button>
   </div>
 </div>
@@ -19,7 +22,7 @@
 <div class="container">
   <div class="card">
     <h2>Novo tipo de registro</h2>
-    <p class="sub">Isso cria uma nova aba na ficha de cada atleta. As quatro abas iniciais (Anamnese, Atendimentos, Demandas, Intervenções) já vêm pré-cadastradas abaixo — você pode editá-las ou criar outras do zero.</p>
+    <p class="sub">Isso cria uma nova aba na ficha de cada atleta (além de Anamnese, que é fixa). O "Acompanhamento" já vem pré-cadastrado abaixo — você pode editá-lo ou criar outras do zero.</p>
 
     <label for="nomeTipo">Nome da aba</label>
     <input type="text" id="nomeTipo" placeholder="Avaliação física">
@@ -29,14 +32,14 @@
     <button class="btn btn-outline" style="margin-top:6px;" onclick="adicionarCampo()">+ adicionar campo</button>
 
     <label style="margin-top:18px;">Visibilidade padrão</label>
-    <div class="tabbar" id="visBar">
-      <button class="tabbtn active" data-v="compartilhada" onclick="escolherVisibilidade('compartilhada')">Compartilhada</button>
-      <button class="tabbtn" data-v="privada" onclick="escolherVisibilidade('privada')">Privada</button>
-      <button class="tabbtn" data-v="mista" onclick="escolherVisibilidade('mista')">Mista</button>
+    <div class="subtab-bar" id="visBar">
+      <button class="subtab-btn active" data-v="compartilhada" onclick="escolherVisibilidade('compartilhada')">Compartilhada</button>
+      <button class="subtab-btn" data-v="privada" onclick="escolherVisibilidade('privada')">Privada</button>
+      <button class="subtab-btn" data-v="mista" onclick="escolherVisibilidade('mista')">Mista</button>
     </div>
     <p class="hint">
       Compartilhada: os dois profissionais veem tudo. Privada: só quem criou o registro vê.
-      Mista: privada por padrão, com opção de marcar um campo como "visível ao colega" em cada registro individual (como no Atendimento).
+      Mista: privada por padrão, com opção de marcar um campo como "visível ao colega" em cada registro individual.
     </p>
 
     <button class="btn btn-gold" style="margin-top:16px;" onclick="salvarTipo()">Criar aba</button>
@@ -53,7 +56,7 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -64,43 +67,13 @@ let visibilidadeAtual = "compartilhada";
 
 const TIPOS_PADRAO = [
   {
-    nome: "Anamnese",
-    visibilidadePadrao: "compartilhada",
-    campos: [
-      { nome: "Histórico esportivo", tipo: "texto_longo" },
-      { nome: "Contexto familiar", tipo: "texto_longo" },
-      { nome: "Observações iniciais", tipo: "texto_longo" },
-      { nome: "Anexo", tipo: "anexo" }
-    ]
-  },
-  {
-    nome: "Atendimentos",
-    visibilidadePadrao: "mista",
-    campos: [
-      { nome: "Data do atendimento", tipo: "data" },
-      { nome: "Conteúdo da sessão", tipo: "texto_longo" },
-      { nome: "Visível ao colega", tipo: "texto_curto" },
-      { nome: "Anexo", tipo: "anexo" }
-    ]
-  },
-  {
-    nome: "Demandas",
+    nome: "Acompanhamento",
     visibilidadePadrao: "compartilhada",
     campos: [
       { nome: "Data", tipo: "data" },
-      { nome: "Origem", tipo: "selecao", opcoes: ["Comissão técnica", "Autodemanda", "Encaminhamento", "Família"] },
-      { nome: "Descrição", tipo: "texto_longo" },
-      { nome: "Status", tipo: "selecao", opcoes: ["Aberta", "Em andamento", "Encerrada"] }
-    ]
-  },
-  {
-    nome: "Intervenções",
-    visibilidadePadrao: "compartilhada",
-    campos: [
-      { nome: "Data", tipo: "data" },
-      { nome: "Plano / decisão", tipo: "texto_longo" },
-      { nome: "Profissional responsável", tipo: "texto_curto" },
-      { nome: "Anexo", tipo: "anexo" }
+      { nome: "Demanda", tipo: "selecao", opcoes: ["Comissão técnica", "Autodemanda", "Encaminhamento", "Família"] },
+      { nome: "Profissional que atendeu", tipo: "texto_curto" },
+      { nome: "Observações", tipo: "texto_longo" }
     ]
   }
 ];
@@ -130,13 +103,30 @@ async function carregarTipos() {
     const t = d.data();
     const row = document.createElement("div");
     row.className = "field-row";
+    row.style.flexDirection = "column";
+    row.style.alignItems = "stretch";
     row.innerHTML = `
-      <span>${escapeHtml(t.nome)} <span class="pill pill-outline" style="margin-left:6px;">${escapeHtml(t.visibilidadePadrao)}</span> · ${t.campos.length} campo(s)</span>
-      <button class="btn btn-outline" style="padding:4px 10px; font-size:12px;" data-id="${d.id}">Remover</button>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span>${escapeHtml(t.nome)} · ${t.campos.length} campo(s)</span>
+        <button class="btn btn-outline" style="padding:4px 10px; font-size:12px;" data-remove="${d.id}">Remover</button>
+      </div>
+      <div class="subtab-bar" style="margin-top:8px;" data-editvis="${d.id}">
+        <button class="subtab-btn ${t.visibilidadePadrao === 'compartilhada' ? 'active' : ''}" data-v="compartilhada">Compartilhada</button>
+        <button class="subtab-btn ${t.visibilidadePadrao === 'privada' ? 'active' : ''}" data-v="privada">Privada</button>
+        <button class="subtab-btn ${t.visibilidadePadrao === 'mista' ? 'active' : ''}" data-v="mista">Mista</button>
+      </div>
     `;
-    row.querySelector("button").addEventListener("click", () => removerTipo(d.id));
+    row.querySelector("[data-remove]").addEventListener("click", () => removerTipo(d.id));
+    row.querySelectorAll(`[data-editvis="${d.id}"] .subtab-btn`).forEach(btn => {
+      btn.addEventListener("click", () => mudarVisibilidadeExistente(d.id, btn.dataset.v, row));
+    });
     el.appendChild(row);
   });
+}
+
+async function mudarVisibilidadeExistente(id, novaVis, row) {
+  await updateDoc(doc(db, "tiposRegistro", id), { visibilidadePadrao: novaVis });
+  row.querySelectorAll(`[data-editvis="${id}"] .subtab-btn`).forEach(b => b.classList.toggle("active", b.dataset.v === novaVis));
 }
 
 async function removerTipo(id) {
@@ -166,7 +156,7 @@ window.adicionarCampo = function () {
 
 window.escolherVisibilidade = function (v) {
   visibilidadeAtual = v;
-  document.querySelectorAll("#visBar .tabbtn").forEach(b => b.classList.toggle("active", b.dataset.v === v));
+  document.querySelectorAll("#visBar .subtab-btn").forEach(b => b.classList.toggle("active", b.dataset.v === v));
 };
 
 window.salvarTipo = async function () {

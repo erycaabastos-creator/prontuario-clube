@@ -8,10 +8,13 @@
 </head>
 <body>
 
-<div class="topbar">
+<div class="topbar no-print">
   <span class="brand">Prontuário · Cuiabá EC</span>
   <div>
     <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="window.location.href='atendimentos.html'" style="margin-right:8px;">Atendimentos</button>
+    <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="window.location.href='importar-anamneses.html'" style="margin-right:8px;">Importar</button>
     <button onclick="sair()">Sair</button>
   </div>
 </div>
@@ -23,12 +26,25 @@
   </div>
 
   <div class="card">
-    <div class="tabbar" id="tabbar"></div>
+    <div class="subtab-bar" id="tabbarPrincipal">
+      <button class="subtab-btn active" id="tabAnamnese" onclick="selecionarPrincipal('anamnese')">Anamnese</button>
+    </div>
 
-    <div id="formNovoRegistro"></div>
+    <div id="painelAnamnese">
+      <div class="subtab-bar">
+        <button class="subtab-btn active" id="btnParte1" onclick="selecionarParte(1)">Parte 1 · Dados gerais</button>
+        <button class="subtab-btn" id="btnParte2" onclick="selecionarParte(2)">Parte 2 · Avaliação psicológica</button>
+      </div>
 
-    <div id="historico" style="margin-top:18px;"></div>
-    <p id="semRegistros" class="hint" style="display:none;">Nenhum registro nesta aba ainda.</p>
+      <div id="parte1View"></div>
+      <div id="parte2View" style="display:none;"></div>
+    </div>
+
+    <div id="painelGenerico" style="display:none;">
+      <div id="formNovoRegistro"></div>
+      <div id="historico" style="margin-top:18px;"></div>
+      <p id="semRegistros" class="hint" style="display:none;">Nenhum registro nesta aba ainda.</p>
+    </div>
   </div>
 </div>
 
@@ -36,27 +52,37 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const LIMITE_ANEXO_BYTES = 700 * 1024; // ~700KB — cabe com folga no limite de 1MiB por documento do Firestore
+const LIMITE_ANEXO_BYTES = 700 * 1024;
 
 const params = new URLSearchParams(window.location.search);
 const atletaId = params.get("id");
 
 let usuarioAtual = null;
+let atletaData = null;
 let tipos = [];
 let tipoAtivo = null;
+let abaPrincipal = "anamnese";
+let parteAtiva = 1;
+let anamneseData = { parte1: {}, parte2: {} };
+
+const FATORES_PRIORIDADE = ["Estudo","Dinheiro","Paz","Sucesso/fama","Família","Amor/relacionamento","Saúde","Futebol","Deus","Bem-estar"];
+const TRACOS = ["Calmo","Irritado","Agressivo","Tímido","Autoexigente","Disciplinado","Tolerante à dor","Resistente a longa rotina de treinamento","Tolerante às frustrações"];
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) { window.location.href = "index.html"; return; }
   if (!atletaId) { window.location.href = "atletas.html"; return; }
   usuarioAtual = user;
   await carregarAtleta();
+  await carregarAnamnese();
   await carregarTipos();
+  renderParte1();
+  renderParte2();
 });
 
 window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
@@ -64,54 +90,379 @@ window.sair = function () { signOut(auth).then(() => window.location.href = "ind
 async function carregarAtleta() {
   const snap = await getDoc(doc(db, "atletas", atletaId));
   if (!snap.exists()) { window.location.href = "atletas.html"; return; }
-  const a = snap.data();
-  document.getElementById("nomeAtleta").textContent = a.nome;
+  atletaData = snap.data();
+  document.getElementById("nomeAtleta").textContent = atletaData.nome;
+  const entradaFmt = atletaData.dataEntrada ? formatarData(atletaData.dataEntrada) : null;
   document.getElementById("metaAtleta").textContent =
-    `${a.ano || "—"}${a.categoria ? " · " + a.categoria : ""}${a.posicao ? " · " + a.posicao : ""}`;
+    `${atletaData.ano || "—"}${atletaData.categoria ? " · " + atletaData.categoria : ""}${atletaData.posicao ? " · " + atletaData.posicao : ""}${entradaFmt ? " · no clube desde " + entradaFmt : ""}`;
 }
+
+async function carregarAnamnese() {
+  const snap = await getDoc(doc(db, "anamneses", atletaId));
+  if (snap.exists()) {
+    const d = snap.data();
+    anamneseData.parte1 = d.parte1 || {};
+    anamneseData.parte2 = d.parte2 || {};
+  }
+}
+
+// ---- Navegação entre Anamnese e abas dinâmicas ----
+window.selecionarPrincipal = function (chave) {
+  abaPrincipal = chave;
+  document.querySelectorAll("#tabbarPrincipal .subtab-btn").forEach(b => b.classList.remove("active"));
+  if (chave === "anamnese") {
+    document.getElementById("tabAnamnese").classList.add("active");
+    document.getElementById("painelAnamnese").style.display = "block";
+    document.getElementById("painelGenerico").style.display = "none";
+  } else {
+    document.querySelector(`[data-tipo="${chave}"]`).classList.add("active");
+    document.getElementById("painelAnamnese").style.display = "none";
+    document.getElementById("painelGenerico").style.display = "block";
+    tipoAtivo = tipos.find(t => t.id === chave);
+    renderFormularioGenerico();
+    carregarHistoricoGenerico();
+  }
+};
+
+window.selecionarParte = function (n) {
+  parteAtiva = n;
+  document.getElementById("btnParte1").classList.toggle("active", n === 1);
+  document.getElementById("btnParte2").classList.toggle("active", n === 2);
+  document.getElementById("parte1View").style.display = n === 1 ? "block" : "none";
+  document.getElementById("parte2View").style.display = n === 2 ? "block" : "none";
+};
 
 async function carregarTipos() {
   const q = query(collection(db, "tiposRegistro"), orderBy("nome"));
   const snap = await getDocs(q);
   tipos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  if (tipos.length === 0) return;
-
-  const bar = document.getElementById("tabbar");
-  bar.innerHTML = "";
-  tipos.forEach((t, i) => {
+  const bar = document.getElementById("tabbarPrincipal");
+  tipos.forEach(t => {
     const btn = document.createElement("button");
-    btn.className = "tabbtn" + (i === 0 ? " active" : "");
+    btn.className = "subtab-btn";
+    btn.dataset.tipo = t.id;
     btn.textContent = t.nome;
-    btn.onclick = () => selecionarTipo(t.id);
+    btn.onclick = () => selecionarPrincipal(t.id);
     bar.appendChild(btn);
   });
-
-  selecionarTipo(tipos[0].id);
 }
 
-function selecionarTipo(tipoId) {
-  tipoAtivo = tipos.find(t => t.id === tipoId);
-  document.querySelectorAll("#tabbar .tabbtn").forEach((btn, i) => {
-    btn.classList.toggle("active", tipos[i].id === tipoId);
+// =====================================================================
+// ANAMNESE — PARTE 1
+// =====================================================================
+function renderParte1() {
+  const p1 = anamneseData.parte1;
+  const clubes = p1.clubes || [];
+  const el = document.getElementById("parte1View");
+  el.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <p class="hint" style="margin:0;">Conteúdo que pode ser exportado para a comissão técnica.</p>
+      <button class="btn btn-outline no-print" style="font-size:12px;" onclick="gerarRelatorioParte1()">📄 Gerar relatório PDF</button>
+    </div>
+
+    <label>Assinatura (nome do profissional)</label>
+    <input type="text" id="p1_assinatura" placeholder="Seu nome completo">
+
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;"><label>Data da anamnese</label><input type="date" id="p1_dataAnamnese" value="${p1.dataAnamnese || ''}"></div>
+      <div style="flex:1;"><label>Cidade em que nasceu</label><input type="text" id="p1_cidadeNatal" value="${escAttr(p1.cidadeNatal)}"></div>
+    </div>
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;"><label>Nome do pai</label><input type="text" id="p1_nomePai" value="${escAttr(p1.nomePai)}"></div>
+      <div style="flex:1;"><label>Nome da mãe</label><input type="text" id="p1_nomeMae" value="${escAttr(p1.nomeMae)}"></div>
+    </div>
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;">
+        <label>Estuda atualmente</label>
+        <select id="p1_estuda" onchange="document.getElementById('p1_serieWrap').style.display = this.value==='Sim' ? 'block' : 'none';">
+          <option value="" ${!p1.estuda ? "selected" : ""}>Selecione</option>
+          <option value="Sim" ${p1.estuda === "Sim" ? "selected" : ""}>Sim</option>
+          <option value="Não" ${p1.estuda === "Não" ? "selected" : ""}>Não</option>
+        </select>
+      </div>
+      <div style="flex:1; display:${p1.estuda === "Sim" ? "block" : "none"};" id="p1_serieWrap">
+        <label>Série / ano escolar</label>
+        <input type="text" id="p1_serie" value="${escAttr(p1.serie)}" placeholder="9º ano">
+      </div>
+    </div>
+
+    <label style="margin-top:14px;">Linha do tempo · clubes anteriores</label>
+    <div class="timeline" id="timelineView"></div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <input type="text" id="novoClubeNome" placeholder="Nome do clube" style="flex:2;">
+      <input type="text" id="novoClubeInicio" placeholder="Início (ano)" style="flex:1;">
+      <input type="text" id="novoClubeFim" placeholder="Fim (ano ou 'atual')" style="flex:1;">
+    </div>
+    <button class="btn btn-outline" style="margin-top:6px; font-size:12px;" onclick="adicionarClube()">+ adicionar passagem</button>
+
+    <label style="margin-top:14px;">Contexto familiar</label>
+    <textarea id="p1_contextoFamiliar">${escHtml(p1.contextoFamiliar)}</textarea>
+
+    <label>Observações</label>
+    <textarea id="p1_observacoes">${escHtml(p1.observacoes)}</textarea>
+
+    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarParte1()">Salvar Parte 1</button>
+    <p id="p1_erro" class="error-msg" style="display:none;"></p>
+    <p id="p1_ok" style="color:#3B6D11; font-size:13px; margin-top:6px; display:none;"></p>
+  `;
+  renderTimeline(clubes);
+}
+
+let clubesTemp = [];
+function renderTimeline(clubes) {
+  clubesTemp = clubes.slice();
+  const el = document.getElementById("timelineView");
+  el.innerHTML = "";
+  if (clubesTemp.length === 0) {
+    el.innerHTML = `<p class="hint">Nenhuma passagem cadastrada ainda.</p>`;
+    return;
+  }
+  clubesTemp.forEach((c, i) => {
+    const item = document.createElement("div");
+    item.className = "timeline-item";
+    item.innerHTML = `
+      <p class="clube-nome">${escHtml(c.clube)} <button style="border:none;background:none;color:#A32D2D;cursor:pointer;font-size:11px;" data-i="${i}">remover</button></p>
+      <p class="clube-periodo">${escHtml(c.inicio)} – ${escHtml(c.fim)}</p>
+    `;
+    item.querySelector("button").addEventListener("click", () => {
+      clubesTemp.splice(i, 1);
+      renderTimeline(clubesTemp);
+    });
+    el.appendChild(item);
   });
-  renderFormulario();
-  carregarHistorico();
 }
 
-function renderFormulario() {
+window.adicionarClube = function () {
+  const nome = document.getElementById("novoClubeNome").value.trim();
+  const inicio = document.getElementById("novoClubeInicio").value.trim();
+  const fim = document.getElementById("novoClubeFim").value.trim();
+  if (!nome) return;
+  clubesTemp.push({ clube: nome, inicio, fim: fim || "atual" });
+  renderTimeline(clubesTemp);
+  document.getElementById("novoClubeNome").value = "";
+  document.getElementById("novoClubeInicio").value = "";
+  document.getElementById("novoClubeFim").value = "";
+};
+
+window.salvarParte1 = async function () {
+  const erroEl = document.getElementById("p1_erro");
+  const okEl = document.getElementById("p1_ok");
+  erroEl.style.display = "none"; okEl.style.display = "none";
+
+  const assinatura = document.getElementById("p1_assinatura").value.trim();
+  if (!assinatura) {
+    erroEl.textContent = "Preencha a assinatura antes de salvar.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const parte1 = {
+    dataAnamnese: document.getElementById("p1_dataAnamnese").value,
+    cidadeNatal: document.getElementById("p1_cidadeNatal").value.trim(),
+    nomePai: document.getElementById("p1_nomePai").value.trim(),
+    nomeMae: document.getElementById("p1_nomeMae").value.trim(),
+    estuda: document.getElementById("p1_estuda").value,
+    serie: document.getElementById("p1_serie") ? document.getElementById("p1_serie").value.trim() : "",
+    clubes: clubesTemp,
+    contextoFamiliar: document.getElementById("p1_contextoFamiliar").value.trim(),
+    observacoes: document.getElementById("p1_observacoes").value.trim(),
+    assinatura,
+    atualizadoEm: new Date().toISOString()
+  };
+
+  anamneseData.parte1 = parte1;
+  await setDoc(doc(db, "anamneses", atletaId), { parte1, parte2: anamneseData.parte2 }, { merge: true });
+
+  okEl.textContent = "Parte 1 salva.";
+  okEl.style.display = "block";
+};
+
+window.gerarRelatorioParte1 = function () {
+  const p1 = anamneseData.parte1;
+  const clubesHtml = (p1.clubes || []).map(c => `<li>${escHtml(c.clube)} (${escHtml(c.inicio)}–${escHtml(c.fim)})</li>`).join("");
+  const html = `
+    <html><head><meta charset="UTF-8"><title>Anamnese · ${escHtml(atletaData.nome)}</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 32px; color: #222; }
+      h1 { color: #304E38; font-size: 20px; }
+      h2 { color: #304E38; font-size: 15px; margin-top: 20px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+      p { font-size: 13px; line-height: 1.5; }
+      ul { font-size: 13px; }
+    </style></head>
+    <body>
+      <h1>Anamnese — Dados gerais</h1>
+      <p><strong>Atleta:</strong> ${escHtml(atletaData.nome)} — ${escHtml(atletaData.categoria || atletaData.ano || "")}</p>
+      <p><strong>Data da anamnese:</strong> ${p1.dataAnamnese ? formatarData(p1.dataAnamnese) : "—"}</p>
+      <h2>Identificação</h2>
+      <p><strong>Cidade natal:</strong> ${escHtml(p1.cidadeNatal) || "—"}</p>
+      <p><strong>Nome do pai:</strong> ${escHtml(p1.nomePai) || "—"} &nbsp; <strong>Nome da mãe:</strong> ${escHtml(p1.nomeMae) || "—"}</p>
+      <p><strong>Estuda atualmente:</strong> ${escHtml(p1.estuda) || "—"} ${p1.serie ? "(" + escHtml(p1.serie) + ")" : ""}</p>
+      <h2>Trajetória em clubes</h2>
+      <ul>${clubesHtml || "<li>—</li>"}</ul>
+      <h2>Contexto familiar</h2>
+      <p>${escHtml(p1.contextoFamiliar) || "—"}</p>
+      <h2>Observações</h2>
+      <p>${escHtml(p1.observacoes) || "—"}</p>
+    </body></html>
+  `;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 300);
+};
+
+// =====================================================================
+// ANAMNESE — PARTE 2
+// =====================================================================
+let ordemPrioridades = [];
+let respostasTracos = {};
+
+function renderParte2() {
+  const p2 = anamneseData.parte2;
+  ordemPrioridades = p2.prioridades ? p2.prioridades.slice() : [];
+  respostasTracos = p2.tracos ? { ...p2.tracos } : {};
+
+  const el = document.getElementById("parte2View");
+  el.innerHTML = `
+    <p class="hint">Uso interno da equipe de psicologia — não pode ser exportado.</p>
+
+    <label>Assinatura (nome do profissional)</label>
+    <input type="text" id="p2_assinatura" placeholder="Seu nome completo">
+
+    <label>Trajetória no futebol (início, motivações, posição, treinador ideal, ídolo)</label>
+    <textarea id="p2_trajetoria">${escHtml(p2.trajetoria)}</textarea>
+
+    <label style="margin-top:12px;">Prioridades de vida</label>
+    <p class="hint">Clique na ordem de importância (1º = mais importante).</p>
+    <div id="rankList"></div>
+    <button class="btn btn-outline no-print" style="margin-top:6px; font-size:12px;" onclick="resetRanking()">Recomeçar</button>
+
+    <label style="margin-top:14px;">Autopercepção — você se considera:</label>
+    <div class="trait-grid-header"><div></div><div style="text-align:center;">Sim</div><div style="text-align:center;">Não</div><div style="text-align:center;">Mais ou menos</div></div>
+    <div id="traitGrid"></div>
+
+    <label style="margin-top:14px;">Situações que geram ansiedade (esporte e vida)</label>
+    <textarea id="p2_ansiedade">${escHtml(p2.ansiedade)}</textarea>
+
+    <label>Reação a vaias, aplausos e torcida</label>
+    <textarea id="p2_reacaoTorcida">${escHtml(p2.reacaoTorcida)}</textarea>
+
+    <label>Expectativas no clube</label>
+    <textarea id="p2_expectativas">${escHtml(p2.expectativas)}</textarea>
+
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;">
+        <label>Já fez terapia antes</label>
+        <select id="p2_terapia">
+          <option value="" ${!p2.terapia ? "selected" : ""}>Selecione</option>
+          <option value="Sim" ${p2.terapia === "Sim" ? "selected" : ""}>Sim</option>
+          <option value="Não" ${p2.terapia === "Não" ? "selected" : ""}>Não</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Em que o profissional poderia ajudar</label>
+    <textarea id="p2_comoAjudar">${escHtml(p2.comoAjudar)}</textarea>
+
+    <label>Observações psicológicas</label>
+    <textarea id="p2_observacoes">${escHtml(p2.observacoesPsicologicas)}</textarea>
+
+    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarParte2()">Salvar Parte 2</button>
+    <p id="p2_erro" class="error-msg" style="display:none;"></p>
+    <p id="p2_ok" style="color:#3B6D11; font-size:13px; margin-top:6px; display:none;"></p>
+  `;
+  renderRanking();
+  renderTraitGrid();
+}
+
+function renderRanking() {
+  const el = document.getElementById("rankList");
+  el.innerHTML = "";
+  FATORES_PRIORIDADE.forEach(f => {
+    const pos = ordemPrioridades.indexOf(f);
+    const row = document.createElement("div");
+    row.className = "rank-row";
+    row.innerHTML = `<span class="rank-badge ${pos >= 0 ? 'filled' : ''}">${pos >= 0 ? pos + 1 : ''}</span><span>${escHtml(f)}</span>`;
+    row.onclick = () => {
+      if (ordemPrioridades.includes(f)) ordemPrioridades = ordemPrioridades.filter(x => x !== f);
+      else ordemPrioridades.push(f);
+      renderRanking();
+    };
+    el.appendChild(row);
+  });
+}
+
+window.resetRanking = function () { ordemPrioridades = []; renderRanking(); };
+
+function renderTraitGrid() {
+  const el = document.getElementById("traitGrid");
+  el.innerHTML = "";
+  TRACOS.forEach(t => {
+    const row = document.createElement("div");
+    row.className = "trait-grid-row";
+    let cells = `<span>${escHtml(t)}</span>`;
+    ["Sim", "Não", "Mais ou menos"].forEach(opt => {
+      const checked = respostasTracos[t] === opt;
+      cells += `<div style="text-align:center;"><span class="trait-radio ${checked ? 'checked' : ''}" data-t="${escAttr(t)}" data-o="${opt}"></span></div>`;
+    });
+    row.innerHTML = cells;
+    el.appendChild(row);
+  });
+  el.querySelectorAll(".trait-radio").forEach(s => {
+    s.onclick = () => { respostasTracos[s.dataset.t] = s.dataset.o; renderTraitGrid(); };
+  });
+}
+
+window.salvarParte2 = async function () {
+  const erroEl = document.getElementById("p2_erro");
+  const okEl = document.getElementById("p2_ok");
+  erroEl.style.display = "none"; okEl.style.display = "none";
+
+  const assinatura = document.getElementById("p2_assinatura").value.trim();
+  if (!assinatura) {
+    erroEl.textContent = "Preencha a assinatura antes de salvar.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const parte2 = {
+    trajetoria: document.getElementById("p2_trajetoria").value.trim(),
+    prioridades: ordemPrioridades,
+    tracos: respostasTracos,
+    ansiedade: document.getElementById("p2_ansiedade").value.trim(),
+    reacaoTorcida: document.getElementById("p2_reacaoTorcida").value.trim(),
+    expectativas: document.getElementById("p2_expectativas").value.trim(),
+    terapia: document.getElementById("p2_terapia").value,
+    comoAjudar: document.getElementById("p2_comoAjudar").value.trim(),
+    observacoesPsicologicas: document.getElementById("p2_observacoes").value.trim(),
+    assinatura,
+    atualizadoEm: new Date().toISOString()
+  };
+
+  anamneseData.parte2 = parte2;
+  await setDoc(doc(db, "anamneses", atletaId), { parte1: anamneseData.parte1, parte2 }, { merge: true });
+
+  okEl.textContent = "Parte 2 salva.";
+  okEl.style.display = "block";
+};
+
+// =====================================================================
+// ABAS GENÉRICAS (ex.: Acompanhamento e outras criadas em "Tipos de registro")
+// =====================================================================
+function renderFormularioGenerico() {
   const el = document.getElementById("formNovoRegistro");
   if (!tipoAtivo) { el.innerHTML = ""; return; }
 
   let camposHtml = tipoAtivo.campos.map((campo, idx) => {
     const id = `campo-${idx}`;
-    if (campo.tipo === "texto_curto") return `<label>${esc(campo.nome)}</label><input type="text" id="${id}">`;
-    if (campo.tipo === "texto_longo") return `<label>${esc(campo.nome)}</label><textarea id="${id}"></textarea>`;
-    if (campo.tipo === "data") return `<label>${esc(campo.nome)}</label><input type="date" id="${id}">`;
+    if (campo.tipo === "texto_curto") return `<label>${escHtml(campo.nome)}</label><input type="text" id="${id}">`;
+    if (campo.tipo === "texto_longo") return `<label>${escHtml(campo.nome)}</label><textarea id="${id}"></textarea>`;
+    if (campo.tipo === "data") return `<label>${escHtml(campo.nome)}</label><input type="date" id="${id}">`;
     if (campo.tipo === "selecao") {
-      const opts = (campo.opcoes || []).map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
-      return `<label>${esc(campo.nome)}</label><select id="${id}"><option value="">Selecione</option>${opts}</select>`;
+      const opts = (campo.opcoes || []).map(o => `<option value="${escAttr(o)}">${escHtml(o)}</option>`).join("");
+      return `<label>${escHtml(campo.nome)}</label><select id="${id}"><option value="">Selecione</option>${opts}</select>`;
     }
-    if (campo.tipo === "anexo") return `<label>${esc(campo.nome)}</label><input type="file" id="${id}"><p class="hint">Até 700KB por arquivo.</p>`;
+    if (campo.tipo === "anexo") return `<label>${escHtml(campo.nome)}</label><input type="file" id="${id}"><p class="hint">Até 700KB por arquivo.</p>`;
     return "";
   }).join("");
 
@@ -124,24 +475,33 @@ function renderFormulario() {
   }
 
   el.innerHTML = `
-    <h2>Novo registro · ${esc(tipoAtivo.nome)}</h2>
-    <p class="sub">${legendaVisibilidade(tipoAtivo.visibilidadePadrao)}</p>
+    <h2>Novo registro · ${escHtml(tipoAtivo.nome)}</h2>
+    <p class="sub">${legendaVisibilidadeGenerica(tipoAtivo.visibilidadePadrao)}</p>
+    <label>Assinatura (nome do profissional)</label>
+    <input type="text" id="assinaturaGenerica" placeholder="Seu nome completo">
     ${camposHtml}
     ${visivelColegaHtml}
-    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarRegistro()">Salvar registro</button>
+    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarRegistroGenerico()">Salvar registro</button>
     <p id="erroRegistro" class="error-msg" style="display:none;"></p>
   `;
 }
 
-function legendaVisibilidade(v) {
+function legendaVisibilidadeGenerica(v) {
   if (v === "compartilhada") return "Compartilhada — os dois profissionais veem este registro.";
   if (v === "privada") return "Privada — só você vê este registro.";
   return "Privada por padrão — marque \"visível ao colega\" para compartilhar este registro específico.";
 }
 
-window.salvarRegistro = async function () {
+window.salvarRegistroGenerico = async function () {
   const erroEl = document.getElementById("erroRegistro");
   erroEl.style.display = "none";
+
+  const assinatura = document.getElementById("assinaturaGenerica").value.trim();
+  if (!assinatura) {
+    erroEl.textContent = "Preencha a assinatura antes de salvar.";
+    erroEl.style.display = "block";
+    return;
+  }
 
   const dados = {};
   const anexos = {};
@@ -149,12 +509,12 @@ window.salvarRegistro = async function () {
 
   for (let idx = 0; idx < tipoAtivo.campos.length; idx++) {
     const campo = tipoAtivo.campos[idx];
-    const el = document.getElementById(`campo-${idx}`);
+    const elCampo = document.getElementById(`campo-${idx}`);
     if (campo.tipo === "anexo") {
-      const file = el.files[0];
+      const file = elCampo.files[0];
       if (file) {
         if (file.size > LIMITE_ANEXO_BYTES) {
-          erroEl.textContent = `O arquivo em "${campo.nome}" passa de 700KB. Use um arquivo menor (ex.: comprima a imagem ou o PDF).`;
+          erroEl.textContent = `O arquivo em "${campo.nome}" passa de 700KB.`;
           erroEl.style.display = "block";
           temErro = true;
           break;
@@ -168,7 +528,7 @@ window.salvarRegistro = async function () {
         anexos[campo.nome] = { nome: file.name, dados: base64 };
       }
     } else {
-      dados[campo.nome] = el.value;
+      dados[campo.nome] = elCampo.value;
     }
   }
 
@@ -181,16 +541,17 @@ window.salvarRegistro = async function () {
     atletaId, tipoId: tipoAtivo.id,
     dados, anexos,
     visivelColega,
+    assinatura,
     autorUid: usuarioAtual.uid,
     autorEmail: usuarioAtual.email,
     criadoEm: serverTimestamp()
   });
 
-  renderFormulario();
-  carregarHistorico();
+  renderFormularioGenerico();
+  carregarHistoricoGenerico();
 };
 
-async function carregarHistorico() {
+async function carregarHistoricoGenerico() {
   const historicoEl = document.getElementById("historico");
   const semEl = document.getElementById("semRegistros");
   historicoEl.innerHTML = "";
@@ -198,8 +559,6 @@ async function carregarHistorico() {
   const q = query(collection(db, "registros"), where("atletaId", "==", atletaId), where("tipoId", "==", tipoAtivo.id));
   const snap = await getDocs(q);
 
-  // Filtro de visibilidade aplicado no cliente; a regra real de acesso está no firestore.rules,
-  // então mesmo que este filtro fosse contornado, o servidor não devolveria registros indevidos.
   let regs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   regs.sort((a, b) => (b.criadoEm?.seconds || 0) - (a.criadoEm?.seconds || 0));
 
@@ -208,17 +567,17 @@ async function carregarHistorico() {
   regs.forEach(r => {
     const div = document.createElement("div");
     div.className = "entry";
-    const autor = r.autorEmail === usuarioAtual.email ? "você" : r.autorEmail;
+    const autor = r.assinatura ? r.assinatura : (r.autorEmail === usuarioAtual.email ? "você" : r.autorEmail);
     const dataStr = r.criadoEm?.seconds ? new Date(r.criadoEm.seconds * 1000).toLocaleDateString("pt-BR") : "";
     const badge = tipoAtivo.visibilidadePadrao === "mista"
       ? `<span class="pill ${r.visivelColega ? "pill-gold" : "pill-outline"}">${r.visivelColega ? "visível ao colega" : "privado"}</span>`
       : "";
-    let camposStr = Object.entries(r.dados || {}).map(([k, v]) => `<div><strong style="font-weight:600;">${esc(k)}:</strong> ${esc(v || "—")}</div>`).join("");
+    let camposStr = Object.entries(r.dados || {}).map(([k, v]) => `<div><strong style="font-weight:600;">${escHtml(k)}:</strong> ${escHtml(v || "—")}</div>`).join("");
     let anexosStr = Object.entries(r.anexos || {}).map(([k, v]) =>
-      `<a class="attachment-link" href="${v.dados}" download="${esc(v.nome)}">📎 ${esc(v.nome)}</a>`
+      `<a class="attachment-link" href="${v.dados}" download="${escAttr(v.nome)}">📎 ${escHtml(v.nome)}</a>`
     ).join("");
     div.innerHTML = `
-      <div class="meta">${esc(autor)} · ${dataStr} ${badge}</div>
+      <div class="meta">${escHtml(autor)} · ${dataStr} ${badge}</div>
       ${camposStr}
       ${anexosStr}
     `;
@@ -226,9 +585,16 @@ async function carregarHistorico() {
   });
 }
 
-function esc(str) {
+// ---- utilidades ----
+function formatarData(iso) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+function escHtml(str) {
+  if (str === undefined || str === null) return "";
   return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
+function escAttr(str) { return escHtml(str); }
 </script>
 
 </body>

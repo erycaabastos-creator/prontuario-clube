@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atendimentos · Prontuário</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">Prontuário · Cuiabá EC</span>
+  <div>
+    <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="window.location.href='atendimentos.html'" style="margin-right:8px;">Atendimentos</button>
+    <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="window.location.href='importar-anamneses.html'" style="margin-right:8px;">Importar</button>
+    <button onclick="sair()">Sair</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h2>Novo atendimento</h2>
+    <label for="assinaturaNovo">Assinatura (nome do profissional)</label>
+    <input type="text" id="assinaturaNovo" placeholder="Seu nome completo">
+
+    <label for="atletaSelect">Atleta</label>
+    <input type="text" id="atletaBusca" placeholder="Digite para buscar o atleta..." oninput="buscarAtletaForm()">
+    <div id="atletaSugestoes" style="margin-top:4px;"></div>
+    <input type="hidden" id="atletaSelecionadoId">
+    <p id="atletaSelecionadoNome" class="hint"></p>
+
+    <div style="display:flex; gap:12px;">
+      <div style="flex:1;">
+        <label for="dataAtendimento">Data</label>
+        <input type="date" id="dataAtendimento">
+      </div>
+    </div>
+
+    <label>Visibilidade deste atendimento</label>
+    <div class="subtab-bar" id="visBar">
+      <button class="subtab-btn active" data-v="privada" onclick="escolherVis('privada')">Privada</button>
+      <button class="subtab-btn" data-v="compartilhada" onclick="escolherVis('compartilhada')">Compartilhada</button>
+      <button class="subtab-btn" data-v="mista" onclick="escolherVis('mista')">Mista</button>
+    </div>
+    <p class="hint" id="legendaVis">Privada: só você vê o conteúdo. O fato de você ter atendido este atleta nesta data continua visível ao colega na tela de Atendimentos.</p>
+
+    <label for="conteudoAtendimento">Conteúdo da sessão</label>
+    <textarea id="conteudoAtendimento" style="min-height:100px;"></textarea>
+
+    <div id="notaMistaWrap" style="display:none;">
+      <label for="notaVisivelColega">Nota visível ao colega (resumo curto, opcional)</label>
+      <input type="text" id="notaVisivelColega" placeholder="Ex.: acompanhar ansiedade pré-jogo">
+    </div>
+
+    <button class="btn btn-gold" style="margin-top:14px;" onclick="salvarAtendimento()">Salvar atendimento</button>
+    <p id="erroNovo" class="error-msg" style="display:none;"></p>
+    <p id="okNovo" style="color:#3B6D11; font-size:13px; margin-top:6px; display:none;"></p>
+  </div>
+
+  <div class="card">
+    <h2>Consultar atendimentos</h2>
+    <div class="subtab-bar">
+      <button class="subtab-btn active" id="btnPorDia" onclick="mudarModo('dia')">Por dia</button>
+      <button class="subtab-btn" id="btnPorAtleta" onclick="mudarModo('atleta')">Por atleta</button>
+    </div>
+    <div class="subtab-bar">
+      <button class="subtab-btn active" data-f="todos" onclick="escolherFiltroAutor('todos')">Todos</button>
+      <button class="subtab-btn" data-f="meus" onclick="escolherFiltroAutor('meus')">Só os meus</button>
+      <button class="subtab-btn" data-f="colega" onclick="escolherFiltroAutor('colega')">Só do colega</button>
+    </div>
+
+    <div id="modoDia">
+      <div class="cal-nav">
+        <button onclick="mudarMes(-1)">‹</button>
+        <span id="mesAtual" style="font-size:14px; color:#304E38; font-weight:600;"></span>
+        <button onclick="mudarMes(1)">›</button>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+    </div>
+
+    <div id="modoAtleta" style="display:none;">
+      <input type="text" id="buscaAtletaConsulta" placeholder="Digite o nome do atleta..." oninput="buscarAtletaConsulta()">
+      <div id="atletaConsultaSugestoes" style="margin-top:4px;"></div>
+    </div>
+
+    <p id="resultadoTitulo" class="hint" style="margin-top:14px;"></p>
+    <div id="resultadoLista"></div>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, setDoc, getDocs, query, where, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let usuarioAtual = null;
+let atletas = [];
+let visibilidadeEscolhida = "privada";
+let modo = "dia";
+let filtroAutor = "todos";
+let mesRef = new Date();
+let diaSelecionado = null;
+let atletaConsultaSelecionado = null;
+let todosAtendimentos = [];
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  usuarioAtual = user;
+  await carregarAtletas();
+  await carregarAtendimentos();
+  renderCalendario();
+});
+
+window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
+
+async function carregarAtletas() {
+  const snap = await getDocs(collection(db, "atletas"));
+  atletas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function carregarAtendimentos() {
+  const snap = await getDocs(query(collection(db, "atendimentos_meta"), orderBy("data", "desc")));
+  todosAtendimentos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderCalendario();
+  renderResultado();
+}
+
+// ---- Formulário: buscar atleta ----
+window.buscarAtletaForm = function () {
+  const termo = document.getElementById("atletaBusca").value.trim().toLowerCase();
+  const el = document.getElementById("atletaSugestoes");
+  el.innerHTML = "";
+  if (!termo) return;
+  atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6).forEach(a => {
+    const item = document.createElement("div");
+    item.className = "field-row";
+    item.style.cursor = "pointer";
+    item.innerHTML = `<span>${esc(a.nome)}</span><span class="pill pill-outline">${esc(a.categoria || a.ano || "")}</span>`;
+    item.onclick = () => {
+      document.getElementById("atletaSelecionadoId").value = a.id;
+      document.getElementById("atletaSelecionadoNome").textContent = `Selecionado: ${a.nome}`;
+      document.getElementById("atletaBusca").value = "";
+      el.innerHTML = "";
+    };
+    el.appendChild(item);
+  });
+};
+
+window.escolherVis = function (v) {
+  visibilidadeEscolhida = v;
+  document.querySelectorAll("#visBar .subtab-btn").forEach(b => b.classList.toggle("active", b.dataset.v === v));
+  const legendas = {
+    privada: "Privada: só você vê o conteúdo. O fato de você ter atendido este atleta nesta data continua visível ao colega na tela de Atendimentos.",
+    compartilhada: "Compartilhada: os dois profissionais veem o conteúdo completo.",
+    mista: "Mista: o conteúdo fica privado, mas você pode deixar uma nota curta visível ao colega abaixo."
+  };
+  document.getElementById("legendaVis").textContent = legendas[v];
+  document.getElementById("notaMistaWrap").style.display = v === "mista" ? "block" : "none";
+};
+
+window.salvarAtendimento = async function () {
+  const erroEl = document.getElementById("erroNovo");
+  const okEl = document.getElementById("okNovo");
+  erroEl.style.display = "none";
+  okEl.style.display = "none";
+
+  const assinatura = document.getElementById("assinaturaNovo").value.trim();
+  const atletaId = document.getElementById("atletaSelecionadoId").value;
+  const atletaNome = document.getElementById("atletaSelecionadoNome").textContent.replace("Selecionado: ", "");
+  const data = document.getElementById("dataAtendimento").value;
+  const conteudo = document.getElementById("conteudoAtendimento").value.trim();
+  const notaVisivelColega = document.getElementById("notaVisivelColega").value.trim();
+
+  if (!assinatura || !atletaId || !data || !conteudo) {
+    erroEl.textContent = "Preencha assinatura, atleta, data e conteúdo antes de salvar.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const id = doc(collection(db, "atendimentos_meta")).id;
+
+  await setDoc(doc(db, "atendimentos_meta", id), {
+    atletaId, atletaNome, data, assinatura,
+    autorUid: usuarioAtual.uid,
+    visibilidade: visibilidadeEscolhida,
+    notaVisivelColega: visibilidadeEscolhida === "mista" ? notaVisivelColega : "",
+    criadoEm: new Date().toISOString()
+  });
+
+  await setDoc(doc(db, "atendimentos_conteudo", id), {
+    conteudo,
+    autorUid: usuarioAtual.uid
+  });
+
+  okEl.textContent = "Atendimento salvo.";
+  okEl.style.display = "block";
+  document.getElementById("atletaSelecionadoId").value = "";
+  document.getElementById("atletaSelecionadoNome").textContent = "";
+  document.getElementById("dataAtendimento").value = "";
+  document.getElementById("conteudoAtendimento").value = "";
+  document.getElementById("notaVisivelColega").value = "";
+  await carregarAtendimentos();
+};
+
+// ---- Consulta ----
+window.mudarModo = function (m) {
+  modo = m;
+  document.getElementById("btnPorDia").classList.toggle("active", m === "dia");
+  document.getElementById("btnPorAtleta").classList.toggle("active", m === "atleta");
+  document.getElementById("modoDia").style.display = m === "dia" ? "block" : "none";
+  document.getElementById("modoAtleta").style.display = m === "atleta" ? "block" : "none";
+  renderResultado();
+};
+
+window.escolherFiltroAutor = function (f) {
+  filtroAutor = f;
+  document.querySelectorAll('[data-f]').forEach(b => b.classList.toggle("active", b.dataset.f === f));
+  renderResultado();
+};
+
+window.mudarMes = function (delta) {
+  mesRef.setMonth(mesRef.getMonth() + delta);
+  diaSelecionado = null;
+  renderCalendario();
+  renderResultado();
+};
+
+function renderCalendario() {
+  const ano = mesRef.getFullYear();
+  const mes = mesRef.getMonth();
+  document.getElementById("mesAtual").textContent = mesRef.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  const diasComAtendimento = new Set(
+    todosAtendimentos.filter(passaFiltroAutor).map(a => a.data)
+  );
+
+  const primeiroDia = new Date(ano, mes, 1).getDay();
+  const totalDias = new Date(ano, mes + 1, 0).getDate();
+  const grid = document.getElementById("calGrid");
+  grid.innerHTML = "";
+
+  for (let i = 0; i < primeiroDia; i++) {
+    const vazio = document.createElement("div");
+    vazio.className = "cal-day empty";
+    grid.appendChild(vazio);
+  }
+
+  for (let dia = 1; dia <= totalDias; dia++) {
+    const dataStr = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+    const cell = document.createElement("div");
+    cell.className = "cal-day" + (diasComAtendimento.has(dataStr) ? " has-dot" : "") + (diaSelecionado === dataStr ? " selected" : "");
+    cell.textContent = dia;
+    cell.onclick = () => {
+      diaSelecionado = diaSelecionado === dataStr ? null : dataStr;
+      renderCalendario();
+      renderResultado();
+    };
+    grid.appendChild(cell);
+  }
+}
+
+window.buscarAtletaConsulta = function () {
+  const termo = document.getElementById("buscaAtletaConsulta").value.trim().toLowerCase();
+  const el = document.getElementById("atletaConsultaSugestoes");
+  el.innerHTML = "";
+  atletaConsultaSelecionado = null;
+  if (!termo) { renderResultado(); return; }
+  atletas.filter(a => (a.nome || "").toLowerCase().includes(termo)).slice(0, 6).forEach(a => {
+    const item = document.createElement("div");
+    item.className = "field-row";
+    item.style.cursor = "pointer";
+    item.innerHTML = `<span>${esc(a.nome)}</span>`;
+    item.onclick = () => {
+      atletaConsultaSelecionado = a.id;
+      document.getElementById("buscaAtletaConsulta").value = a.nome;
+      el.innerHTML = "";
+      renderResultado();
+    };
+    el.appendChild(item);
+  });
+};
+
+function passaFiltroAutor(a) {
+  if (filtroAutor === "meus") return a.autorUid === usuarioAtual.uid;
+  if (filtroAutor === "colega") return a.autorUid !== usuarioAtual.uid;
+  return true;
+}
+
+function renderResultado() {
+  const tituloEl = document.getElementById("resultadoTitulo");
+  const listaEl = document.getElementById("resultadoLista");
+  listaEl.innerHTML = "";
+
+  let resultado = todosAtendimentos.filter(passaFiltroAutor);
+
+  if (modo === "dia") {
+    if (!diaSelecionado) {
+      tituloEl.textContent = "Clique numa data do calendário para ver os atendimentos daquele dia.";
+      return;
+    }
+    resultado = resultado.filter(a => a.data === diaSelecionado);
+    const [y, m, d] = diaSelecionado.split("-");
+    tituloEl.textContent = `${d}/${m}/${y} · ${resultado.length} atendimento(s)`;
+  } else {
+    if (!atletaConsultaSelecionado) {
+      tituloEl.textContent = "Busque um atleta acima para ver o histórico de atendimentos dele.";
+      return;
+    }
+    resultado = resultado.filter(a => a.atletaId === atletaConsultaSelecionado);
+    tituloEl.textContent = `${resultado.length} atendimento(s) encontrado(s)`;
+  }
+
+  resultado.forEach(a => {
+    const row = document.createElement("div");
+    row.className = "entry";
+    const [y, m, d] = (a.data || "").split("-");
+    const dataFmt = y ? `${d}/${m}/${y}` : "";
+    const notaHtml = a.visibilidade === "mista" && a.notaVisivelColega
+      ? `<div style="font-size:12px; color:#5F5E5A; margin-top:4px;">📝 ${esc(a.notaVisivelColega)}</div>` : "";
+    row.innerHTML = `
+      <div class="meta">
+        <a href="atleta.html?id=${a.atletaId}" style="color:#304E38; font-weight:600; text-decoration:underline;">${esc(a.atletaNome)}</a>
+        · ${dataFmt} · ${esc(a.assinatura)}
+        <span class="pill pill-outline" style="margin-left:6px;">${esc(a.visibilidade)}</span>
+      </div>
+      ${notaHtml}
+    `;
+    listaEl.appendChild(row);
+  });
+}
+
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+</script>
+
+</body>
+</html>

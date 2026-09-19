@@ -155,3 +155,69 @@ textarea { min-height: 90px; resize: vertical; }
   text-decoration: none;
   margin-top: 6px;
 }
+
+/* Calendário simples */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 12px; }
+.cal-day {
+  aspect-ratio: 1;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; font-size: 13px; cursor: pointer;
+  background: #EFEAD9; color: #304E38;
+}
+.cal-day.selected { background: #304E38; color: #F8F4EC; }
+.cal-day.has-dot { position: relative; }
+.cal-day.has-dot::after {
+  content: ""; position: absolute; bottom: 4px; width: 4px; height: 4px;
+  border-radius: 50%; background: #C0A258;
+}
+.cal-day.empty { background: transparent; cursor: default; }
+.cal-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.cal-nav button { background: none; border: none; color: #304E38; font-size: 16px; cursor: pointer; padding: 2px 8px; }
+
+/* Sub-abas (Parte 1 / Parte 2, Atletas/Tipos/Atendimentos) */
+.subtab-bar { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.subtab-btn { border: none; padding: 7px 14px; border-radius: 20px; font-size: 13px; background: #EFEAD9; color: #304E38; cursor: pointer; }
+.subtab-btn.active { background: #304E38; color: #F8F4EC; }
+
+/* Linha do tempo de clubes */
+.timeline { position: relative; padding-left: 16px; border-left: 2px solid #C0A258; }
+.timeline-item { margin-bottom: 12px; }
+.timeline-item .clube-nome { font-size: 13px; color: #304E38; font-weight: 600; margin: 0; }
+.timeline-item .clube-periodo { font-size: 12px; color: #8C8A80; margin: 0; }
+
+/* Ranking clicável */
+.rank-row {
+  display: flex; align-items: center; gap: 10px;
+  background: #FCFBF7; border-radius: 8px; padding: 8px 10px;
+  margin-bottom: 6px; cursor: pointer;
+}
+.rank-badge {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; flex-shrink: 0;
+  background: #EFEAD9; color: #8C8A80;
+}
+.rank-badge.filled { background: #304E38; color: #F8F4EC; }
+
+/* Grade de traços */
+.trait-grid-row {
+  display: grid; grid-template-columns: 1fr 60px 60px 90px;
+  gap: 6px 4px; align-items: center; padding: 6px 0;
+  border-top: 1px solid #EFEAD9; font-size: 13px;
+}
+.trait-grid-header { display: grid; grid-template-columns: 1fr 60px 60px 90px; gap: 6px 4px; font-size: 12px; color: #8C8A80; margin-bottom: 4px; }
+.trait-radio {
+  display: inline-block; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #D9D3C3; cursor: pointer; margin: 0 auto;
+}
+.trait-radio.checked { background: #304E38; border-color: #304E38; }
+
+.pastaBtn { display: flex; justify-content: space-between; align-items: center; background: #EFEAD9; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; border: none; width: 100%; text-align: left; font-size: 14px; color: #304E38; }
+.pastaBtn.aberta { background: #304E38; color: #F8F4EC; }
+
+.aviso-pill { font-size: 11px; background: #D9A05B; color: #40300F; padding: 2px 8px; border-radius: 20px; margin-left: 6px; }
+
+@media print {
+  .topbar, .no-print { display: none !important; }
+  body { background: white; }
+}

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Importar anamneses · Prontuário</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">Prontuário · Cuiabá EC</span>
+  <div>
+    <button onclick="window.location.href='atletas.html'" style="margin-right:8px;">Atletas</button>
+    <button onclick="window.location.href='atendimentos.html'" style="margin-right:8px;">Atendimentos</button>
+    <button onclick="window.location.href='admin-tipos.html'" style="margin-right:8px;">Tipos de registro</button>
+    <button onclick="sair()">Sair</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <h2>Importar anamneses antigas (Google Forms)</h2>
+    <p class="sub">
+      No Google Forms, abra a planilha de respostas, vá em Arquivo &gt; Fazer download &gt; Valores separados por vírgula (.csv), e envie o arquivo aqui.
+      Cada linha vira uma anamnese. Se o atleta ainda não existir no sistema (pelo nome), ele é criado automaticamente.
+      Atletas que já têm anamnese preenchida no sistema são pulados, para não sobrescrever nada.
+    </p>
+    <input type="file" id="arquivoCsv" accept=".csv">
+    <button class="btn btn-outline" style="margin-top:10px;" onclick="processarArquivo()">Analisar arquivo</button>
+
+    <div id="preview" style="margin-top:16px;"></div>
+    <button id="btnImportar" class="btn btn-gold" style="margin-top:14px; display:none;" onclick="importarTudo()">Importar todas as linhas válidas</button>
+    <p id="erroImport" class="error-msg" style="display:none;"></p>
+    <div id="logImport" style="margin-top:14px;"></div>
+  </div>
+</div>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let usuarioAtual = null;
+let linhasProcessadas = [];
+let atletasExistentes = [];
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  usuarioAtual = user;
+});
+
+window.sair = function () { signOut(auth).then(() => window.location.href = "index.html"); };
+
+// ---- Parser de CSV simples (lida com campos entre aspas, vírgulas e quebras de linha internas) ----
+function parseCSV(texto) {
+  const linhas = [];
+  let campo = "", linha = [], dentroAspas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i], prox = texto[i + 1];
+    if (dentroAspas) {
+      if (c === '"' && prox === '"') { campo += '"'; i++; }
+      else if (c === '"') { dentroAspas = false; }
+      else { campo += c; }
+    } else {
+      if (c === '"') dentroAspas = true;
+      else if (c === ',') { linha.push(campo); campo = ""; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && prox === '\n') i++;
+        linha.push(campo); campo = "";
+        if (linha.length > 1 || linha[0] !== "") linhas.push(linha);
+        linha = [];
+      } else { campo += c; }
+    }
+  }
+  if (campo !== "" || linha.length > 0) { linha.push(campo); linhas.push(linha); }
+  return linhas;
+}
+
+function acharColuna(headers, termos) {
+  const idx = headers.findIndex(h => termos.some(t => h.toLowerCase().includes(t.toLowerCase())));
+  return idx;
+}
+
+function converterDataBR(str) {
+  if (!str) return "";
+  const partes = str.trim().split(/[\/\-]/);
+  if (partes.length === 3) {
+    let [d, m, y] = partes;
+    if (y.length === 2) y = "20" + y;
+    if (d.length <= 2 && m.length <= 2 && y.length === 4) {
+      return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+    }
+  }
+  return "";
+}
+
+window.processarArquivo = async function () {
+  const input = document.getElementById("arquivoCsv");
+  const erroEl = document.getElementById("erroImport");
+  erroEl.style.display = "none";
+  if (!input.files[0]) {
+    erroEl.textContent = "Escolha um arquivo .csv primeiro.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const texto = await input.files[0].text();
+  const linhas = parseCSV(texto);
+  if (linhas.length < 2) {
+    erroEl.textContent = "Não encontrei linhas de resposta nesse arquivo.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const headers = linhas[0];
+  const idxNome = acharColuna(headers, ["nome completo"]);
+  const idxNascimento = acharColuna(headers, ["data de nascimento"]);
+  const idxAnamnese = acharColuna(headers, ["data da anamnese"]);
+  const idxCategoria = acharColuna(headers, ["categoria"]);
+  const idxObservacoes = acharColuna(headers, ["observações", "observacoes"]);
+
+  if (idxNome === -1) {
+    erroEl.textContent = 'Não encontrei uma coluna de "Nome completo" nesse CSV. Confirme se é o arquivo certo.';
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const snapAtletas = await getDocs(collection(db, "atletas"));
+  atletasExistentes = snapAtletas.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  linhasProcessadas = linhas.slice(1).filter(l => l[idxNome] && l[idxNome].trim()).map(l => {
+    const nome = l[idxNome].trim();
+    const existente = atletasExistentes.find(a => (a.nome || "").trim().toLowerCase() === nome.toLowerCase());
+    const brutoBlocos = headers.map((h, i) => l[i] ? `${h}: ${l[i]}` : null).filter(Boolean).join("\n\n");
+    return {
+      nome,
+      ano: idxNascimento >= 0 && l[idxNascimento] ? converterDataBR(l[idxNascimento]).slice(0, 4) : "",
+      categoria: idxCategoria >= 0 ? l[idxCategoria] : "",
+      dataAnamnese: idxAnamnese >= 0 ? converterDataBR(l[idxAnamnese]) : "",
+      observacoes: idxObservacoes >= 0 ? l[idxObservacoes] : "",
+      bruto: brutoBlocos,
+      atletaExistenteId: existente ? existente.id : null
+    };
+  });
+
+  renderPreview();
+};
+
+function renderPreview() {
+  const el = document.getElementById("preview");
+  el.innerHTML = `<p class="hint">${linhasProcessadas.length} linha(s) encontrada(s):</p>`;
+  linhasProcessadas.forEach(l => {
+    const row = document.createElement("div");
+    row.className = "field-row";
+    row.innerHTML = `<span>${l.nome}${l.ano ? " · " + l.ano : ""}</span><span class="pill ${l.atletaExistenteId ? 'pill-outline' : 'pill-gold'}">${l.atletaExistenteId ? "atleta já existe" : "vai criar atleta novo"}</span>`;
+    el.appendChild(row);
+  });
+  document.getElementById("btnImportar").style.display = linhasProcessadas.length > 0 ? "inline-block" : "none";
+}
+
+window.importarTudo = async function () {
+  const logEl = document.getElementById("logImport");
+  logEl.innerHTML = "<p class='hint'>Importando...</p>";
+  let criados = 0, atualizados = 0, pulados = 0;
+
+  for (const l of linhasProcessadas) {
+    let atletaId = l.atletaExistenteId;
+
+    if (!atletaId) {
+      const novo = await addDoc(collection(db, "atletas"), {
+        nome: l.nome, ano: l.ano || "", categoria: l.categoria || "", posicao: "", dataEntrada: "",
+        criadoEm: serverTimestamp()
+      });
+      atletaId = novo.id;
+      criados++;
+    }
+
+    const anamneseSnap = await getDoc(doc(db, "anamneses", atletaId));
+    if (anamneseSnap.exists()) {
+      pulados++;
+      continue;
+    }
+
+    await setDoc(doc(db, "anamneses", atletaId), {
+      parte1: {
+        dataAnamnese: l.dataAnamnese || "",
+        observacoes: l.observacoes || "",
+        assinatura: "Importado do Forms",
+        atualizadoEm: new Date().toISOString()
+      },
+      parte2: {
+        observacoesPsicologicas: `Conteúdo original do formulário, importado automaticamente:\n\n${l.bruto}`,
+        assinatura: "Importado do Forms",
+        atualizadoEm: new Date().toISOString()
+      }
+    });
+    atualizados++;
+  }
+
+  logEl.innerHTML = `<p class="hint">Concluído: ${criados} atleta(s) novo(s) criado(s), ${atualizados} anamnese(s) importada(s), ${pulados} pulada(s) por já terem anamnese.</p>`;
+};
+</script>
+
+</body>
+</html>
