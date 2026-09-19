@@ -21,8 +21,29 @@
 
 <div class="container">
   <div class="card">
-    <h1 id="nomeAtleta">—</h1>
-    <p class="sub" id="metaAtleta">—</p>
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <div>
+        <h1 id="nomeAtleta">—</h1>
+        <p class="sub" id="metaAtleta">—</p>
+      </div>
+      <div class="no-print">
+        <button class="btn btn-outline" style="font-size:12px; margin-right:6px;" onclick="alternarEdicao()">Editar dados</button>
+        <button class="btn btn-outline" style="font-size:12px; color:#A32D2D; border-color:#A32D2D;" onclick="excluirAtleta()">Excluir atleta</button>
+      </div>
+    </div>
+    <div id="edicaoAtleta" style="display:none; margin-top:14px; border-top:1px solid #EFEAD9; padding-top:14px;">
+      <label>Nome</label>
+      <input type="text" id="edit_nome">
+      <div style="display:flex; gap:12px;">
+        <div style="flex:1;"><label>Ano de nascimento</label><input type="text" id="edit_ano"></div>
+        <div style="flex:1;"><label>Categoria</label><input type="text" id="edit_categoria"></div>
+      </div>
+      <div style="display:flex; gap:12px;">
+        <div style="flex:1;"><label>Posição</label><input type="text" id="edit_posicao"></div>
+        <div style="flex:1;"><label>Data de entrada no clube</label><input type="date" id="edit_dataEntrada"></div>
+      </div>
+      <button class="btn btn-gold" style="margin-top:10px;" onclick="salvarEdicaoAtleta()">Salvar alterações</button>
+    </div>
   </div>
 
   <div class="card">
@@ -52,7 +73,7 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -576,14 +597,67 @@ async function carregarHistoricoGenerico() {
     let anexosStr = Object.entries(r.anexos || {}).map(([k, v]) =>
       `<a class="attachment-link" href="${v.dados}" download="${escAttr(v.nome)}">📎 ${escHtml(v.nome)}</a>`
     ).join("");
+    const podeExcluir = r.autorUid === usuarioAtual.uid;
+    const excluirBtn = podeExcluir
+      ? `<button class="btn btn-outline no-print" style="font-size:11px; padding:3px 8px; margin-left:8px;" data-excluir="${r.id}">Excluir</button>`
+      : "";
     div.innerHTML = `
-      <div class="meta">${escHtml(autor)} · ${dataStr} ${badge}</div>
+      <div class="meta">${escHtml(autor)} · ${dataStr} ${badge}${excluirBtn}</div>
       ${camposStr}
       ${anexosStr}
     `;
+    if (podeExcluir) {
+      div.querySelector("[data-excluir]").addEventListener("click", async () => {
+        if (!confirm("Excluir este registro? Essa ação não pode ser desfeita.")) return;
+        await deleteDoc(doc(db, "registros", r.id));
+        carregarHistoricoGenerico();
+      });
+    }
     historicoEl.appendChild(div);
   });
 }
+
+// ---- Editar / excluir atleta ----
+window.alternarEdicao = function () {
+  const el = document.getElementById("edicaoAtleta");
+  const abrindo = el.style.display === "none";
+  el.style.display = abrindo ? "block" : "none";
+  if (abrindo) {
+    document.getElementById("edit_nome").value = atletaData.nome || "";
+    document.getElementById("edit_ano").value = atletaData.ano || "";
+    document.getElementById("edit_categoria").value = atletaData.categoria || "";
+    document.getElementById("edit_posicao").value = atletaData.posicao || "";
+    document.getElementById("edit_dataEntrada").value = atletaData.dataEntrada || "";
+  }
+};
+
+window.salvarEdicaoAtleta = async function () {
+  const dados = {
+    nome: document.getElementById("edit_nome").value.trim(),
+    ano: document.getElementById("edit_ano").value.trim(),
+    categoria: document.getElementById("edit_categoria").value.trim(),
+    posicao: document.getElementById("edit_posicao").value.trim(),
+    dataEntrada: document.getElementById("edit_dataEntrada").value
+  };
+  await updateDoc(doc(db, "atletas", atletaId), dados);
+  atletaData = { ...atletaData, ...dados };
+  document.getElementById("nomeAtleta").textContent = atletaData.nome;
+  const entradaFmt = atletaData.dataEntrada ? formatarData(atletaData.dataEntrada) : null;
+  document.getElementById("metaAtleta").textContent =
+    `${atletaData.ano || "—"}${atletaData.categoria ? " · " + atletaData.categoria : ""}${atletaData.posicao ? " · " + atletaData.posicao : ""}${entradaFmt ? " · no clube desde " + entradaFmt : ""}`;
+  document.getElementById("edicaoAtleta").style.display = "none";
+};
+
+window.excluirAtleta = async function () {
+  const confirmacao = prompt(`Isso apaga o cadastro de "${atletaData.nome}" permanentemente. Digite o nome do atleta para confirmar:`);
+  if (confirmacao !== atletaData.nome) {
+    if (confirmacao !== null) alert("Nome não confere. Nada foi excluído.");
+    return;
+  }
+  await deleteDoc(doc(db, "atletas", atletaId));
+  alert("Atleta excluído. Anamnese e registros já feitos permanecem no banco, mas ficam sem um atleta vinculado visível na lista.");
+  window.location.href = "atletas.html";
+};
 
 // ---- utilidades ----
 function formatarData(iso) {
