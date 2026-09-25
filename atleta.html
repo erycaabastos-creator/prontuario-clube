@@ -477,6 +477,7 @@ function renderFormularioGenerico() {
   let camposHtml = tipoAtivo.campos.map((campo, idx) => {
     const id = `campo-${idx}`;
     if (campo.tipo === "texto_curto") return `<label>${escHtml(campo.nome)}</label><input type="text" id="${id}">`;
+    if (campo.tipo === "texto_sugestoes") return `<label>${escHtml(campo.nome)}</label><input type="text" id="${id}" list="dl-${id}" autocomplete="off"><datalist id="dl-${id}"></datalist>`;
     if (campo.tipo === "texto_longo") return `<label>${escHtml(campo.nome)}</label><textarea id="${id}"></textarea>`;
     if (campo.tipo === "data") return `<label>${escHtml(campo.nome)}</label><input type="date" id="${id}">`;
     if (campo.tipo === "selecao") {
@@ -584,6 +585,7 @@ async function carregarHistoricoGenerico() {
   regs.sort((a, b) => (b.criadoEm?.seconds || 0) - (a.criadoEm?.seconds || 0));
 
   semEl.style.display = regs.length === 0 ? "block" : "none";
+  popularSugestoes(regs);
 
   regs.forEach(r => {
     const div = document.createElement("div");
@@ -614,6 +616,16 @@ async function carregarHistoricoGenerico() {
       });
     }
     historicoEl.appendChild(div);
+  });
+}
+
+function popularSugestoes(regs) {
+  tipoAtivo.campos.forEach((campo, idx) => {
+    if (campo.tipo !== "texto_sugestoes") return;
+    const dl = document.getElementById(`dl-campo-${idx}`);
+    if (!dl) return;
+    const valores = new Set(regs.map(r => (r.dados || {})[campo.nome]).filter(Boolean));
+    dl.innerHTML = Array.from(valores).map(v => `<option value="${escAttr(v)}">`).join("");
   });
 }
 
